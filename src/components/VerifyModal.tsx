@@ -1,7 +1,8 @@
 import { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Check, X, AlertTriangle, Loader2, Pill, Building2, Hash } from 'lucide-react';
+import { Check, X, AlertTriangle, Loader2, Pill, Building2, Hash, Edit3 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
+import ManualMedicationForm from './ManualMedicationForm';
 
 interface MedicationData {
   brand_name?: string;
@@ -13,12 +14,21 @@ interface MedicationData {
   active_ingredients?: Array<{ name: string; strength: string }>;
 }
 
+interface ManualMedicationData {
+  medication_name: string;
+  dosage?: string;
+  manufacturer?: string;
+  frequency?: string;
+  instructions?: string;
+  ndc_code: string;
+}
+
 interface VerifyModalProps {
   isOpen: boolean;
   barcode: string;
   onClose: () => void;
-  onConfirm: (data: MedicationData) => void;
-  onAddToPrescriptions: (data: MedicationData) => void;
+  onConfirm: (data: MedicationData | ManualMedicationData) => void;
+  onAddToPrescriptions: (data: MedicationData | ManualMedicationData) => void;
 }
 
 const VerifyModal = ({
@@ -31,9 +41,15 @@ const VerifyModal = ({
   const [loading, setLoading] = useState(true);
   const [medicationData, setMedicationData] = useState<MedicationData | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [showManualEntry, setShowManualEntry] = useState(false);
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
   useEffect(() => {
     if (!isOpen || !barcode) return;
+
+    // Reset states when modal opens
+    setShowManualEntry(false);
+    setIsSubmitting(false);
 
     const fetchMedicationData = async () => {
       setLoading(true);
@@ -99,6 +115,24 @@ const VerifyModal = ({
     }
   };
 
+  const handleManualSubmit = (data: ManualMedicationData) => {
+    setIsSubmitting(true);
+    onAddToPrescriptions(data);
+  };
+
+  const handleManualLogAndSubmit = (data: ManualMedicationData) => {
+    setIsSubmitting(true);
+    onConfirm(data);
+  };
+
+  const handleEnterManually = () => {
+    setShowManualEntry(true);
+  };
+
+  const handleCancelManualEntry = () => {
+    setShowManualEntry(false);
+  };
+
   return (
     <AnimatePresence>
       {isOpen && (
@@ -129,7 +163,7 @@ const VerifyModal = ({
               {/* Header */}
               <div className="flex items-center justify-between mb-6">
                 <h2 className="text-xl font-display font-semibold text-foreground">
-                  Verify Medication
+                  {showManualEntry ? 'Enter Medication Details' : 'Verify Medication'}
                 </h2>
                 <Button variant="ghost" size="icon" onClick={onClose} className="rounded-full">
                   <X className="w-5 h-5" />
@@ -144,25 +178,46 @@ const VerifyModal = ({
                 </div>
               )}
 
-              {/* Error State */}
-              {!loading && error && (
-                <div className="text-center py-8">
+              {/* Error State - with Manual Entry option */}
+              {!loading && error && !showManualEntry && (
+                <motion.div
+                  initial={{ opacity: 0, y: 10 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  className="text-center py-8"
+                >
                   <div className="w-16 h-16 mx-auto mb-4 bg-destructive/10 rounded-full flex items-center justify-center">
                     <AlertTriangle className="w-8 h-8 text-destructive" />
                   </div>
                   <h3 className="text-lg font-semibold text-foreground mb-2">Not Found</h3>
                   <p className="text-muted-foreground font-serif text-sm mb-6">{error}</p>
-                  <p className="text-xs text-muted-foreground mb-4">
+                  <p className="text-xs text-muted-foreground mb-6">
                     Scanned code: <span className="font-mono">{barcode}</span>
                   </p>
-                  <Button variant="outline" onClick={onClose} className="w-full">
-                    Try Another Scan
-                  </Button>
-                </div>
+                  <div className="space-y-3">
+                    <Button onClick={handleEnterManually} className="w-full h-12">
+                      <Edit3 className="w-4 h-4 mr-2" />
+                      Enter Details Manually
+                    </Button>
+                    <Button variant="outline" onClick={onClose} className="w-full">
+                      Try Another Scan
+                    </Button>
+                  </div>
+                </motion.div>
+              )}
+
+              {/* Manual Entry Form */}
+              {!loading && showManualEntry && (
+                <ManualMedicationForm
+                  barcode={barcode}
+                  onSubmit={handleManualSubmit}
+                  onLogAndSubmit={handleManualLogAndSubmit}
+                  onCancel={handleCancelManualEntry}
+                  isSubmitting={isSubmitting}
+                />
               )}
 
               {/* Success State */}
-              {!loading && medicationData && (
+              {!loading && medicationData && !showManualEntry && (
                 <>
                   {/* Safety Warning */}
                   <div className="bg-secondary/50 border border-secondary rounded-xl p-4 mb-6">
