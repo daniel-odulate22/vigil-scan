@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
-import { motion } from 'framer-motion';
-import { Pill, Plus, MoreVertical, Trash2, Edit } from 'lucide-react';
+import { motion, AnimatePresence } from 'framer-motion';
+import { Pill, MoreVertical, Trash2, Edit, Bell } from 'lucide-react';
 import { useAuth } from '@/hooks/useAuth';
 import { supabase } from '@/integrations/supabase/client';
 import { Button } from '@/components/ui/button';
@@ -11,6 +11,8 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 import { useToast } from '@/hooks/use-toast';
+import EditPrescriptionForm from '@/components/EditPrescriptionForm';
+import ReminderManager from '@/components/ReminderManager';
 
 interface Prescription {
   id: string;
@@ -28,6 +30,8 @@ const PrescriptionsPage = () => {
   const { toast } = useToast();
   const [prescriptions, setPrescriptions] = useState<Prescription[]>([]);
   const [loading, setLoading] = useState(true);
+  const [editingPrescription, setEditingPrescription] = useState<Prescription | null>(null);
+  const [reminderPrescription, setReminderPrescription] = useState<Prescription | null>(null);
 
   useEffect(() => {
     if (!user) return;
@@ -103,6 +107,12 @@ const PrescriptionsPage = () => {
         variant: 'destructive',
       });
     }
+  };
+
+  const handlePrescriptionSaved = (updated: Prescription) => {
+    setPrescriptions((prev) =>
+      prev.map((p) => (p.id === updated.id ? updated : p))
+    );
   };
 
   return (
@@ -194,6 +204,14 @@ const PrescriptionsPage = () => {
                     </Button>
                   </DropdownMenuTrigger>
                   <DropdownMenuContent align="end">
+                    <DropdownMenuItem onClick={() => setEditingPrescription(prescription)}>
+                      <Edit className="w-4 h-4 mr-2" />
+                      Edit
+                    </DropdownMenuItem>
+                    <DropdownMenuItem onClick={() => setReminderPrescription(prescription)}>
+                      <Bell className="w-4 h-4 mr-2" />
+                      Reminders
+                    </DropdownMenuItem>
                     <DropdownMenuItem
                       onClick={() => handleToggleActive(prescription.id, prescription.is_active)}
                     >
@@ -221,6 +239,28 @@ const PrescriptionsPage = () => {
           ))}
         </div>
       )}
+
+      {/* Edit Modal */}
+      <AnimatePresence>
+        {editingPrescription && (
+          <EditPrescriptionForm
+            prescription={editingPrescription}
+            onClose={() => setEditingPrescription(null)}
+            onSaved={handlePrescriptionSaved}
+          />
+        )}
+      </AnimatePresence>
+
+      {/* Reminder Modal */}
+      <AnimatePresence>
+        {reminderPrescription && (
+          <ReminderManager
+            prescriptionId={reminderPrescription.id}
+            medicationName={reminderPrescription.medication_name}
+            onClose={() => setReminderPrescription(null)}
+          />
+        )}
+      </AnimatePresence>
     </div>
   );
 };
