@@ -1,5 +1,5 @@
 import { NavLink, useLocation } from 'react-router-dom';
-import { Home, Pill, User, ScanBarcode } from 'lucide-react';
+import { Pill, User, ScanBarcode } from 'lucide-react';
 import { motion } from 'framer-motion';
 
 interface BottomNavProps {
@@ -15,7 +15,7 @@ const BottomNav = ({ onScanClick }: BottomNavProps) => {
     label 
   }: { 
     to: string; 
-    icon: typeof Home; 
+    icon: typeof Pill; 
     label: string;
   }) => {
     const isActive = location.pathname === to;
@@ -27,8 +27,14 @@ const BottomNav = ({ onScanClick }: BottomNavProps) => {
           isActive ? 'text-primary' : 'text-muted-foreground hover:text-foreground'
         }`}
       >
-        <Icon className="w-5 h-5" />
-        <span className="text-xs mt-1 font-medium">{label}</span>
+        <motion.div
+          className="flex flex-col items-center"
+          whileTap={{ scale: 0.9 }}
+          transition={{ type: 'spring', stiffness: 400, damping: 17 }}
+        >
+          <Icon className="w-5 h-5" />
+          <span className="text-xs mt-1 font-medium">{label}</span>
+        </motion.div>
         {isActive && (
           <motion.div
             className="absolute top-0 left-1/2 -translate-x-1/2 w-10 h-0.5 bg-primary rounded-full"
@@ -41,15 +47,15 @@ const BottomNav = ({ onScanClick }: BottomNavProps) => {
 
   return (
     <nav className="fixed bottom-0 left-0 right-0 z-50 bg-card border-t border-border safe-area-bottom">
-      <div className="grid grid-cols-4 h-16 max-w-md mx-auto">
-        <NavItem to="/" icon={Home} label="Home" />
+      <div className="grid grid-cols-3 h-16 max-w-md mx-auto">
         <NavItem to="/prescriptions" icon={Pill} label="Meds" />
         
-        {/* Scan button - inline but visually elevated */}
+        {/* Scan button - center, visually elevated */}
         <motion.button
           onClick={onScanClick}
           className="flex flex-col items-center justify-center"
-          whileTap={{ scale: 0.95 }}
+          whileTap={{ scale: 0.9 }}
+          transition={{ type: 'spring', stiffness: 400, damping: 17 }}
           aria-label="Scan medication barcode"
         >
           <div className="-mt-3 w-12 h-12 bg-primary rounded-full flex items-center justify-center shadow-md ring-2 ring-background">
