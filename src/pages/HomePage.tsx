@@ -1,10 +1,10 @@
 import { useState, useEffect } from 'react';
 import { motion } from 'framer-motion';
-import { Calendar, TrendingUp, Pill, Clock, Plus } from 'lucide-react';
+import { Calendar, TrendingUp, Pill, Clock } from 'lucide-react';
 import { useAuth } from '@/hooks/useAuth';
 import { supabase } from '@/integrations/supabase/client';
-import { Button } from '@/components/ui/button';
 import { useToast } from '@/hooks/use-toast';
+import AdherenceCalendar from '@/components/AdherenceCalendar';
 
 interface DashboardStats {
   todayDoses: number;
@@ -196,6 +196,11 @@ const HomePage = () => {
           </p>
           <p className="text-xs text-muted-foreground">Last dose</p>
         </motion.div>
+      </div>
+
+      {/* Adherence Calendar Heatmap */}
+      <div className="mb-6">
+        <AdherenceCalendar />
       </div>
 
       {/* Recent Activity */}
