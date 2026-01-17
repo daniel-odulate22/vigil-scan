@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Pill, MoreVertical, Trash2, Edit, Bell } from 'lucide-react';
+import { Pill, MoreVertical, Trash2, Edit, Bell, AlertTriangle, Loader2 } from 'lucide-react';
 import { useAuth } from '@/hooks/useAuth';
 import { supabase } from '@/integrations/supabase/client';
 import { Button } from '@/components/ui/button';
@@ -13,6 +13,8 @@ import {
 import { useToast } from '@/hooks/use-toast';
 import EditPrescriptionForm from '@/components/EditPrescriptionForm';
 import ReminderManager from '@/components/ReminderManager';
+import InteractionWarningModal from '@/components/InteractionWarningModal';
+import { useDrugInteractions } from '@/hooks/useDrugInteractions';
 
 interface Prescription {
   id: string;
@@ -32,6 +34,17 @@ const PrescriptionsPage = () => {
   const [loading, setLoading] = useState(true);
   const [editingPrescription, setEditingPrescription] = useState<Prescription | null>(null);
   const [reminderPrescription, setReminderPrescription] = useState<Prescription | null>(null);
+  
+  // Interaction checking
+  const [showInteractionModal, setShowInteractionModal] = useState(false);
+  const [interactionsList, setInteractionsList] = useState<Array<{
+    severity: 'high' | 'moderate' | 'low';
+    description: string;
+    drug1: string;
+    drug2: string;
+  }>>([]);
+  
+  const { checkAllPrescriptionInteractions, isChecking } = useDrugInteractions();
 
   useEffect(() => {
     if (!user) return;
@@ -115,6 +128,20 @@ const PrescriptionsPage = () => {
     );
   };
 
+  const handleCheckAllInteractions = async () => {
+    const result = await checkAllPrescriptionInteractions();
+    
+    if (result.hasInteractions) {
+      setInteractionsList(result.interactions);
+      setShowInteractionModal(true);
+    } else {
+      toast({
+        title: 'No Interactions Found',
+        description: 'Your current medications have no known interactions.',
+      });
+    }
+  };
+
   return (
     <div className="pb-24 pt-4 px-4">
       {/* Header */}
@@ -131,6 +158,24 @@ const PrescriptionsPage = () => {
             {prescriptions.filter((p) => p.is_active).length} active medications
           </p>
         </div>
+        
+        {/* Check Interactions Button */}
+        {prescriptions.filter((p) => p.is_active).length >= 2 && (
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={handleCheckAllInteractions}
+            disabled={isChecking}
+            className="flex items-center gap-2"
+          >
+            {isChecking ? (
+              <Loader2 className="w-4 h-4 animate-spin" />
+            ) : (
+              <AlertTriangle className="w-4 h-4" />
+            )}
+            <span className="hidden sm:inline">Check Interactions</span>
+          </Button>
+        )}
       </motion.div>
 
       {/* Prescriptions List */}
@@ -261,6 +306,16 @@ const PrescriptionsPage = () => {
           />
         )}
       </AnimatePresence>
+
+      {/* Interaction Warning Modal */}
+      <InteractionWarningModal
+        isOpen={showInteractionModal}
+        onClose={() => setShowInteractionModal(false)}
+        onContinue={() => setShowInteractionModal(false)}
+        onCancel={() => setShowInteractionModal(false)}
+        interactions={interactionsList}
+        newDrugName="Your medications"
+      />
     </div>
   );
 };

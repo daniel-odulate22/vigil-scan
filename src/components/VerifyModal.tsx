@@ -3,6 +3,8 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { Check, X, AlertTriangle, Loader2, Pill, Building2, Hash, Edit3 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import ManualMedicationForm from './ManualMedicationForm';
+import InteractionWarningModal from './InteractionWarningModal';
+import { useDrugInteractions } from '@/hooks/useDrugInteractions';
 
 interface MedicationData {
   brand_name?: string;
@@ -43,6 +45,19 @@ const VerifyModal = ({
   const [error, setError] = useState<string | null>(null);
   const [showManualEntry, setShowManualEntry] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  
+  // Interaction checking state
+  const [showInteractionWarning, setShowInteractionWarning] = useState(false);
+  const [pendingAction, setPendingAction] = useState<'confirm' | 'add' | null>(null);
+  const [pendingData, setPendingData] = useState<MedicationData | ManualMedicationData | null>(null);
+  const [interactionsList, setInteractionsList] = useState<Array<{
+    severity: 'high' | 'moderate' | 'low';
+    description: string;
+    drug1: string;
+    drug2: string;
+  }>>([]);
+  
+  const { checkInteractionsWithPrescriptions, isChecking } = useDrugInteractions();
 
   useEffect(() => {
     if (!isOpen || !barcode) return;
@@ -103,26 +118,54 @@ const VerifyModal = ({
     fetchMedicationData();
   }, [isOpen, barcode]);
 
-  const handleConfirmAndLog = () => {
-    if (medicationData) {
-      onConfirm(medicationData);
+  // Helper to check interactions before proceeding
+  const checkAndProceed = async (
+    data: MedicationData | ManualMedicationData,
+    action: 'confirm' | 'add'
+  ) => {
+    const drugName = 'medication_name' in data 
+      ? data.medication_name 
+      : (data.brand_name || data.generic_name || 'Unknown');
+    
+    const result = await checkInteractionsWithPrescriptions(drugName);
+    
+    if (result.hasInteractions) {
+      setPendingData(data);
+      setPendingAction(action);
+      setInteractionsList(result.interactions);
+      setShowInteractionWarning(true);
+    } else {
+      // No interactions, proceed directly
+      if (action === 'confirm') {
+        onConfirm(data);
+      } else {
+        onAddToPrescriptions(data);
+      }
     }
   };
 
-  const handleAddToPrescriptions = () => {
+  const handleConfirmAndLog = async () => {
     if (medicationData) {
-      onAddToPrescriptions(medicationData);
+      await checkAndProceed(medicationData, 'confirm');
     }
   };
 
-  const handleManualSubmit = (data: ManualMedicationData) => {
-    setIsSubmitting(true);
-    onAddToPrescriptions(data);
+  const handleAddToPrescriptions = async () => {
+    if (medicationData) {
+      await checkAndProceed(medicationData, 'add');
+    }
   };
 
-  const handleManualLogAndSubmit = (data: ManualMedicationData) => {
+  const handleManualSubmit = async (data: ManualMedicationData) => {
     setIsSubmitting(true);
-    onConfirm(data);
+    await checkAndProceed(data, 'add');
+    setIsSubmitting(false);
+  };
+
+  const handleManualLogAndSubmit = async (data: ManualMedicationData) => {
+    setIsSubmitting(true);
+    await checkAndProceed(data, 'confirm');
+    setIsSubmitting(false);
   };
 
   const handleEnterManually = () => {
@@ -131,6 +174,27 @@ const VerifyModal = ({
 
   const handleCancelManualEntry = () => {
     setShowManualEntry(false);
+  };
+
+  // Interaction warning handlers
+  const handleInteractionContinue = () => {
+    setShowInteractionWarning(false);
+    if (pendingData && pendingAction) {
+      if (pendingAction === 'confirm') {
+        onConfirm(pendingData);
+      } else {
+        onAddToPrescriptions(pendingData);
+      }
+    }
+    setPendingData(null);
+    setPendingAction(null);
+  };
+
+  const handleInteractionCancel = () => {
+    setShowInteractionWarning(false);
+    setPendingData(null);
+    setPendingAction(null);
+    setIsSubmitting(false);
   };
 
   return (
@@ -299,14 +363,28 @@ const VerifyModal = ({
 
                   {/* Action Buttons */}
                   <div className="space-y-3">
-                    <Button onClick={handleConfirmAndLog} className="w-full h-14 text-base">
-                      <Check className="w-5 h-5 mr-2" />
-                      Confirm & Log as Taken
+                    <Button 
+                      onClick={handleConfirmAndLog} 
+                      className="w-full h-14 text-base"
+                      disabled={isChecking}
+                    >
+                      {isChecking ? (
+                        <>
+                          <Loader2 className="w-5 h-5 mr-2 animate-spin" />
+                          Checking Interactions...
+                        </>
+                      ) : (
+                        <>
+                          <Check className="w-5 h-5 mr-2" />
+                          Confirm & Log as Taken
+                        </>
+                      )}
                     </Button>
                     <Button
                       variant="outline"
                       onClick={handleAddToPrescriptions}
                       className="w-full h-12"
+                      disabled={isChecking}
                     >
                       Add to My Prescriptions
                     </Button>
@@ -315,6 +393,22 @@ const VerifyModal = ({
               )}
             </div>
           </motion.div>
+          
+          {/* Interaction Warning Modal */}
+          <InteractionWarningModal
+            isOpen={showInteractionWarning}
+            onClose={handleInteractionCancel}
+            onContinue={handleInteractionContinue}
+            onCancel={handleInteractionCancel}
+            interactions={interactionsList}
+            newDrugName={
+              pendingData
+                ? 'medication_name' in pendingData
+                  ? pendingData.medication_name
+                  : (pendingData.brand_name || pendingData.generic_name || 'Unknown')
+                : 'Unknown'
+            }
+          />
         </>
       )}
     </AnimatePresence>
