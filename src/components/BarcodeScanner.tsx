@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
-import { Html5Qrcode, Html5QrcodeSupportedFormats } from 'html5-qrcode';
+import { Html5Qrcode, Html5QrcodeSupportedFormats, Html5QrcodeScannerState } from 'html5-qrcode';
 import { motion, AnimatePresence } from 'framer-motion';
-import { X, Camera, CameraOff, AlertTriangle, RotateCcw } from 'lucide-react';
+import { X, Camera, CameraOff, AlertTriangle, RotateCcw, RefreshCw } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 
 interface BarcodeScannerProps {
@@ -12,25 +12,44 @@ interface BarcodeScannerProps {
 
 type PermissionState = 'prompt' | 'granted' | 'denied' | 'error';
 
+// Helper to release all active media streams
+const releaseMediaStreams = () => {
+  const videos = document.querySelectorAll('video');
+  videos.forEach(video => {
+    const stream = video.srcObject as MediaStream;
+    if (stream) {
+      stream.getTracks().forEach(track => track.stop());
+      video.srcObject = null;
+    }
+  });
+};
+
 const BarcodeScanner = ({ isOpen, onClose, onScanSuccess }: BarcodeScannerProps) => {
   const [permissionState, setPermissionState] = useState<PermissionState>('prompt');
   const [isScanning, setIsScanning] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [errorType, setErrorType] = useState<'busy' | 'denied' | 'not-found' | 'generic' | null>(null);
   const scannerRef = useRef<Html5Qrcode | null>(null);
   const lastScannedRef = useRef<string | null>(null);
   const debounceTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const retryCountRef = useRef(0);
 
   // Cleanup scanner on unmount or close
   const stopScanner = useCallback(async () => {
     if (scannerRef.current) {
       try {
-        await scannerRef.current.stop();
+        const state = scannerRef.current.getState();
+        if (state === Html5QrcodeScannerState.SCANNING) {
+          await scannerRef.current.stop();
+        }
         await scannerRef.current.clear();
       } catch (err) {
-        // Scanner might already be stopped
+        console.log('Scanner cleanup:', err);
       }
       scannerRef.current = null;
     }
+    // Release any remaining media streams
+    releaseMediaStreams();
     setIsScanning(false);
   }, []);
 
@@ -98,16 +117,33 @@ const BarcodeScanner = ({ isOpen, onClose, onScanSuccess }: BarcodeScannerProps)
       setPermissionState('granted');
     } catch (err: any) {
       setIsScanning(false);
+      releaseMediaStreams();
       
-      if (err?.message?.includes('Permission') || err?.name === 'NotAllowedError') {
+      const errorName = err?.name || '';
+      const errorMsg = err?.message || '';
+      
+      if (errorName === 'NotAllowedError' || errorMsg.includes('Permission')) {
         setPermissionState('denied');
+        setErrorType('denied');
         setErrorMessage('Camera access was denied. Please allow camera access to scan barcodes.');
-      } else if (err?.message?.includes('not found') || err?.name === 'NotFoundError') {
+      } else if (errorName === 'NotReadableError' || errorMsg.includes('Could not start') || errorMsg.includes('in use')) {
+        // Camera is busy or unavailable - common on mobile
         setPermissionState('error');
+        setErrorType('busy');
+        setErrorMessage('Camera is busy or unavailable. Please close other camera apps (like your native camera or other browser tabs) and try again.');
+      } else if (errorName === 'NotFoundError' || errorMsg.includes('not found')) {
+        setPermissionState('error');
+        setErrorType('not-found');
         setErrorMessage('No camera found on this device.');
+      } else if (errorName === 'OverconstrainedError') {
+        // Constraints not satisfiable - try again with different settings
+        setPermissionState('error');
+        setErrorType('generic');
+        setErrorMessage('Camera settings not supported. Please try again.');
       } else {
         setPermissionState('error');
-        setErrorMessage(err?.message || 'Failed to start camera. Please try again.');
+        setErrorType('generic');
+        setErrorMessage(errorMsg || 'Failed to start camera. Please try again.');
       }
     }
   }, [isScanning, onScanSuccess, stopScanner]);
@@ -148,8 +184,9 @@ const BarcodeScanner = ({ isOpen, onClose, onScanSuccess }: BarcodeScannerProps)
         };
       })
       .catch(() => {
-        // Permissions API not supported, try to start scanner directly
-        setPermissionState('prompt');
+        // Permissions API not supported (common on iOS Safari)
+        // Try to request permission directly
+        handleRequestPermission();
       });
 
     return () => {
@@ -162,24 +199,55 @@ const BarcodeScanner = ({ isOpen, onClose, onScanSuccess }: BarcodeScannerProps)
 
   const handleRequestPermission = async () => {
     try {
+      // First release any existing streams
+      releaseMediaStreams();
+      
       // Request camera access
-      await navigator.mediaDevices.getUserMedia({ video: true });
+      const stream = await navigator.mediaDevices.getUserMedia({ 
+        video: { facingMode: 'environment' } 
+      });
+      
+      // Immediately stop the stream - we just needed permission
+      stream.getTracks().forEach(track => track.stop());
+      
       setPermissionState('granted');
+      retryCountRef.current = 0;
+      
+      // Small delay before starting scanner to ensure camera is released
+      await new Promise(resolve => setTimeout(resolve, 300));
       startScanner();
     } catch (err: any) {
       if (err.name === 'NotAllowedError') {
         setPermissionState('denied');
+        setErrorType('denied');
+      } else if (err.name === 'NotReadableError') {
+        setPermissionState('error');
+        setErrorType('busy');
+        setErrorMessage('Camera is busy. Please close other apps using the camera.');
       } else {
         setPermissionState('error');
+        setErrorType('generic');
         setErrorMessage(err.message || 'Failed to access camera.');
       }
     }
   };
 
-  const handleRetry = () => {
+  const handleRetry = async () => {
     setErrorMessage(null);
+    setErrorType(null);
+    retryCountRef.current += 1;
+    
+    // Stop any existing scanner first
+    await stopScanner();
+    
+    // Add increasing delay for retries to allow camera to fully release
+    const delay = Math.min(500 + (retryCountRef.current * 300), 2000);
+    await new Promise(resolve => setTimeout(resolve, delay));
+    
     setPermissionState('prompt');
-    startScanner();
+    
+    // Try requesting permission again
+    handleRequestPermission();
   };
 
   return (
@@ -272,14 +340,32 @@ const BarcodeScanner = ({ isOpen, onClose, onScanSuccess }: BarcodeScannerProps)
                 animate={{ opacity: 1, y: 0 }}
               >
                 <div className="w-20 h-20 mx-auto mb-6 bg-destructive/10 rounded-full flex items-center justify-center">
-                  <AlertTriangle className="w-10 h-10 text-destructive" />
+                  {errorType === 'busy' ? (
+                    <RefreshCw className="w-10 h-10 text-destructive" />
+                  ) : (
+                    <AlertTriangle className="w-10 h-10 text-destructive" />
+                  )}
                 </div>
                 <h3 className="text-xl font-display font-semibold text-foreground mb-2">
-                  Camera Error
+                  {errorType === 'busy' ? 'Camera Busy' : 'Camera Error'}
                 </h3>
-                <p className="text-muted-foreground font-serif mb-6">
+                <p className="text-muted-foreground font-serif mb-4">
                   {errorMessage || 'An error occurred while accessing the camera.'}
                 </p>
+                
+                {/* Specific guidance based on error type */}
+                {errorType === 'busy' && (
+                  <div className="text-sm text-muted-foreground bg-muted p-3 rounded-lg text-left mb-4">
+                    <p className="font-medium mb-1">Quick fix:</p>
+                    <ol className="list-decimal ml-4 space-y-1">
+                      <li>Close your device's camera app</li>
+                      <li>Close other browser tabs using camera</li>
+                      <li>Wait a few seconds</li>
+                      <li>Tap "Try Again" below</li>
+                    </ol>
+                  </div>
+                )}
+                
                 <Button variant="outline" onClick={handleRetry} className="w-full">
                   <RotateCcw className="w-4 h-4 mr-2" />
                   Try Again
