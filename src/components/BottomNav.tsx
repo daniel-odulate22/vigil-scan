@@ -1,5 +1,5 @@
 import { NavLink, useLocation } from 'react-router-dom';
-import { Pill, User, ScanBarcode, WifiOff } from 'lucide-react';
+import { Pill, User, ScanBarcode, WifiOff, CalendarClock } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useOnlineStatus } from '@/hooks/useOnlineStatus';
 
@@ -63,10 +63,11 @@ const BottomNav = ({ onScanClick }: BottomNavProps) => {
           </motion.div>
         )}
       </AnimatePresence>
-      <div className="grid grid-cols-3 h-16 max-w-md mx-auto">
+      <div className="grid grid-cols-4 h-16 max-w-md mx-auto">
         <NavItem to="/prescriptions" icon={Pill} label="Meds" />
+        <NavItem to="/schedule" icon={CalendarClock} label="Schedule" />
         
-        {/* Scan button - center, visually elevated */}
+        {/* Scan button - elevated */}
         <motion.button
           onClick={onScanClick}
           className="flex flex-col items-center justify-center"
