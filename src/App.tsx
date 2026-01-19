@@ -9,6 +9,7 @@ import Index from "./pages/Index";
 import Auth from "./pages/Auth";
 import PrescriptionsPage from "./pages/PrescriptionsPage";
 import ProfilePage from "./pages/ProfilePage";
+import SchedulePage from "./pages/SchedulePage";
 import BottomNav from "./components/BottomNav";
 import NotFound from "./pages/NotFound";
 import { useState } from "react";
@@ -38,6 +39,7 @@ const App = () => (
             <Route path="/" element={<Index />} />
             <Route path="/auth" element={<Auth />} />
             <Route path="/prescriptions" element={<ProtectedRoute><PrescriptionsPage /><BottomNav onScanClick={() => {}} /></ProtectedRoute>} />
+            <Route path="/schedule" element={<ProtectedRoute><SchedulePage /><BottomNav onScanClick={() => {}} /></ProtectedRoute>} />
             <Route path="/profile" element={<ProtectedRoute><ProfilePage /><BottomNav onScanClick={() => {}} /></ProtectedRoute>} />
             <Route path="*" element={<NotFound />} />
           </Routes>
