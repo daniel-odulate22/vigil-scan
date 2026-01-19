@@ -9,6 +9,8 @@ import HomePage from '@/pages/HomePage';
 import { useAuth } from '@/hooks/useAuth';
 import { supabase } from '@/integrations/supabase/client';
 import { useToast } from '@/hooks/use-toast';
+import { useOfflineSync } from '@/hooks/useOfflineSync';
+import { savePendingDose, PendingDose } from '@/lib/offlineStore';
 
 const ONBOARDING_COMPLETE_KEY = 'vigil_onboarding_complete';
 
@@ -16,6 +18,7 @@ const Index = () => {
   const navigate = useNavigate();
   const { user, loading: authLoading } = useAuth();
   const { toast } = useToast();
+  const { isOnline } = useOfflineSync();
   const [appState, setAppState] = useState<'splash' | 'onboarding' | 'app'>('splash');
   const [scannerOpen, setScannerOpen] = useState(false);
   const [verifyModalOpen, setVerifyModalOpen] = useState(false);
@@ -65,9 +68,16 @@ const Index = () => {
       ? data.medication_name 
       : (data.brand_name || data.generic_name || 'Unknown');
     
+    const doseData = {
+      user_id: user.id,
+      medication_name: medicationName,
+      verified: !isManual,
+      taken_at: new Date().toISOString(),
+    };
+
     try {
-      // If manual entry, also add to prescriptions
-      if (isManual) {
+      // If manual entry, also add to prescriptions (only when online)
+      if (isManual && isOnline) {
         await supabase.from('prescriptions').insert({
           user_id: user.id,
           medication_name: data.medication_name,
@@ -79,18 +89,31 @@ const Index = () => {
         });
       }
 
-      await supabase.from('dose_logs').insert({
-        user_id: user.id,
-        medication_name: medicationName,
-        verified: !isManual, // Manual entries are not verified
-      });
+      if (isOnline) {
+        // Online: save directly to database
+        await supabase.from('dose_logs').insert(doseData);
+        
+        toast({ 
+          title: 'Dose logged!', 
+          description: isManual 
+            ? 'Your medication has been recorded and added to prescriptions.' 
+            : 'Your medication has been recorded.' 
+        });
+      } else {
+        // Offline: save to IndexedDB
+        const pendingDose: PendingDose = {
+          id: crypto.randomUUID(),
+          ...doseData,
+          created_at: new Date().toISOString(),
+        };
+        await savePendingDose(pendingDose);
+        
+        toast({ 
+          title: 'Saved offline', 
+          description: 'Your dose will sync when you\'re back online.',
+        });
+      }
       
-      toast({ 
-        title: 'Dose logged!', 
-        description: isManual 
-          ? 'Your medication has been recorded and added to prescriptions.' 
-          : 'Your medication has been recorded.' 
-      });
       setVerifyModalOpen(false);
     } catch (err) {
       toast({ title: 'Error', description: 'Failed to log dose', variant: 'destructive' });

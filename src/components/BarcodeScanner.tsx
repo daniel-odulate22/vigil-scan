@@ -24,6 +24,14 @@ const releaseMediaStreams = () => {
   });
 };
 
+// Dynamic qrbox function - uses 80% of smaller viewport dimension
+const qrboxFunction = (viewfinderWidth: number, viewfinderHeight: number) => {
+  const minEdge = Math.min(viewfinderWidth, viewfinderHeight);
+  const qrboxWidth = Math.min(Math.floor(minEdge * 0.85), 350);
+  const qrboxHeight = Math.min(Math.floor(qrboxWidth * 0.5), 200); // Barcode aspect ratio
+  return { width: qrboxWidth, height: qrboxHeight };
+};
+
 const BarcodeScanner = ({ isOpen, onClose, onScanSuccess }: BarcodeScannerProps) => {
   const [permissionState, setPermissionState] = useState<PermissionState>('prompt');
   const [isScanning, setIsScanning] = useState(false);
@@ -79,9 +87,14 @@ const BarcodeScanner = ({ isOpen, onClose, onScanSuccess }: BarcodeScannerProps)
       await html5QrCode.start(
         { facingMode: 'environment' },
         {
-          fps: 10,
-          qrbox: { width: 280, height: 180 },
-          aspectRatio: 1.5,
+          fps: 15,
+          qrbox: qrboxFunction,
+          aspectRatio: 1.333, // 4:3 for better barcode visibility
+          videoConstraints: {
+            facingMode: 'environment',
+            width: { min: 640, ideal: 1280, max: 1920 },
+            height: { min: 480, ideal: 720, max: 1080 },
+          },
         },
         (decodedText) => {
           // DEBOUNCE: Prevent multiple scans of same barcode
@@ -375,13 +388,34 @@ const BarcodeScanner = ({ isOpen, onClose, onScanSuccess }: BarcodeScannerProps)
 
             {/* Active Scanner */}
             {(permissionState === 'granted' || isScanning) && (
-              <div className="w-full max-w-sm">
+              <div className="w-full max-w-lg px-4">
                 <div
                   id="scanner-container"
-                  className="w-full aspect-[4/3] bg-foreground/5 rounded-xl overflow-hidden relative"
-                />
+                  className="w-full aspect-[3/4] bg-foreground/5 rounded-xl overflow-hidden relative"
+                >
+                  {/* Animated scan line */}
+                  <motion.div
+                    className="absolute left-4 right-4 h-0.5 bg-primary/80 rounded-full shadow-lg z-10"
+                    style={{ boxShadow: '0 0 8px 2px hsl(var(--primary) / 0.5)' }}
+                    animate={{
+                      top: ['30%', '70%', '30%'],
+                    }}
+                    transition={{
+                      duration: 2.5,
+                      repeat: Infinity,
+                      ease: 'easeInOut',
+                    }}
+                  />
+                  {/* Corner brackets */}
+                  <div className="absolute inset-0 pointer-events-none">
+                    <div className="absolute top-[25%] left-[10%] w-8 h-8 border-t-2 border-l-2 border-primary rounded-tl-lg" />
+                    <div className="absolute top-[25%] right-[10%] w-8 h-8 border-t-2 border-r-2 border-primary rounded-tr-lg" />
+                    <div className="absolute bottom-[25%] left-[10%] w-8 h-8 border-b-2 border-l-2 border-primary rounded-bl-lg" />
+                    <div className="absolute bottom-[25%] right-[10%] w-8 h-8 border-b-2 border-r-2 border-primary rounded-br-lg" />
+                  </div>
+                </div>
                 <p className="text-center text-muted-foreground text-sm mt-4 font-serif">
-                  Point your camera at a medication barcode
+                  Align the barcode within the frame
                 </p>
               </div>
             )}
