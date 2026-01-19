@@ -1,6 +1,7 @@
 import { NavLink, useLocation } from 'react-router-dom';
-import { Pill, User, ScanBarcode } from 'lucide-react';
-import { motion } from 'framer-motion';
+import { Pill, User, ScanBarcode, WifiOff } from 'lucide-react';
+import { motion, AnimatePresence } from 'framer-motion';
+import { useOnlineStatus } from '@/hooks/useOnlineStatus';
 
 interface BottomNavProps {
   onScanClick: () => void;
@@ -8,6 +9,7 @@ interface BottomNavProps {
 
 const BottomNav = ({ onScanClick }: BottomNavProps) => {
   const location = useLocation();
+  const isOnline = useOnlineStatus();
 
   const NavItem = ({ 
     to, 
@@ -47,6 +49,20 @@ const BottomNav = ({ onScanClick }: BottomNavProps) => {
 
   return (
     <nav className="fixed bottom-0 left-0 right-0 z-50 bg-card border-t border-border safe-area-bottom">
+      {/* Offline indicator */}
+      <AnimatePresence>
+        {!isOnline && (
+          <motion.div
+            initial={{ opacity: 0, y: 10 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: 10 }}
+            className="absolute -top-8 left-1/2 -translate-x-1/2 bg-destructive text-destructive-foreground text-xs px-3 py-1 rounded-full flex items-center gap-1.5 shadow-lg"
+          >
+            <WifiOff className="w-3 h-3" />
+            Offline Mode
+          </motion.div>
+        )}
+      </AnimatePresence>
       <div className="grid grid-cols-3 h-16 max-w-md mx-auto">
         <NavItem to="/prescriptions" icon={Pill} label="Meds" />
         
