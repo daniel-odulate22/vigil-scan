@@ -42,10 +42,16 @@ const BarcodeScanner = ({ isOpen, onClose, onScanSuccess }: BarcodeScannerProps)
   const lastScannedRef = useRef<string | null>(null);
   const debounceTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const retryCountRef = useRef(0);
-  const containerReadyRef = useRef(false);
+  const isStartingRef = useRef(false);
+  const isOpenRef = useRef(false);
+
+  const showScannerUi = permissionState === 'granted' || isInitializing || isScanning;
+
+  const nextPaint = () => new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
 
   // Cleanup scanner on unmount or close
   const stopScanner = useCallback(async () => {
+    isStartingRef.current = false;
     if (scannerRef.current) {
       try {
         const state = scannerRef.current.getState();
@@ -61,28 +67,30 @@ const BarcodeScanner = ({ isOpen, onClose, onScanSuccess }: BarcodeScannerProps)
     // Release any remaining media streams
     releaseMediaStreams();
     setIsScanning(false);
+    setIsInitializing(false);
   }, []);
 
   // Start the scanner
   const startScanner = useCallback(async () => {
-    if (isScanning || scannerRef.current) return;
+    if (!isOpenRef.current) return;
+    if (isStartingRef.current || scannerRef.current) return;
     
-    // Wait for container to be ready
-    const container = document.getElementById('scanner-container');
-    if (!container) {
-      console.log('Scanner container not ready, waiting...');
-      setTimeout(() => startScanner(), 100);
-      return;
-    }
-
+    isStartingRef.current = true;
     setIsInitializing(true);
-    setIsScanning(true);
     setErrorMessage(null);
 
     try {
       // Release any existing streams first
       releaseMediaStreams();
       await new Promise(resolve => setTimeout(resolve, 200));
+
+      // Ensure React has rendered the visible container before initializing html5-qrcode
+      await nextPaint();
+
+      const container = document.getElementById('scanner-container');
+      if (!container) {
+        throw new Error('Scanner container not found');
+      }
 
       const html5QrCode = new Html5Qrcode('scanner-container', {
         formatsToSupport: [
@@ -101,9 +109,9 @@ const BarcodeScanner = ({ isOpen, onClose, onScanSuccess }: BarcodeScannerProps)
 
       // Simpler config - let the library handle video constraints
       await html5QrCode.start(
-        { facingMode: 'environment' },
+        { facingMode: { ideal: 'environment' } },
         {
-          fps: 10,
+          fps: 8,
           qrbox: qrboxFunction,
         },
         (decodedText) => {
@@ -138,10 +146,25 @@ const BarcodeScanner = ({ isOpen, onClose, onScanSuccess }: BarcodeScannerProps)
       );
 
       setPermissionState('granted');
+      setIsScanning(true);
       setIsInitializing(false);
+
+      // iOS/Safari reliability: ensure video fills container and plays inline
+      const videoEl = container.querySelector('video') as HTMLVideoElement | null;
+      if (videoEl) {
+        videoEl.setAttribute('playsinline', 'true');
+        videoEl.playsInline = true;
+        videoEl.muted = true;
+        videoEl.style.width = '100%';
+        videoEl.style.height = '100%';
+        videoEl.style.objectFit = 'cover';
+      }
+
+      isStartingRef.current = false;
     } catch (err: any) {
-      setIsScanning(false);
       setIsInitializing(false);
+      setIsScanning(false);
+      isStartingRef.current = false;
       releaseMediaStreams();
       
       const errorName = err?.name || '';
@@ -171,10 +194,11 @@ const BarcodeScanner = ({ isOpen, onClose, onScanSuccess }: BarcodeScannerProps)
         setErrorMessage(errorMsg || 'Failed to start camera. Please try again.');
       }
     }
-  }, [isScanning, onScanSuccess, stopScanner]);
+  }, [onScanSuccess, stopScanner]);
 
   // Check camera permission on open
   useEffect(() => {
+    isOpenRef.current = isOpen;
     if (!isOpen) {
       stopScanner();
       return;
@@ -192,7 +216,7 @@ const BarcodeScanner = ({ isOpen, onClose, onScanSuccess }: BarcodeScannerProps)
       .then((result) => {
         if (result.state === 'granted') {
           setPermissionState('granted');
-          startScanner();
+          requestAnimationFrame(() => startScanner());
         } else if (result.state === 'denied') {
           setPermissionState('denied');
         } else {
@@ -202,7 +226,7 @@ const BarcodeScanner = ({ isOpen, onClose, onScanSuccess }: BarcodeScannerProps)
         result.onchange = () => {
           if (result.state === 'granted') {
             setPermissionState('granted');
-            startScanner();
+            requestAnimationFrame(() => startScanner());
           } else if (result.state === 'denied') {
             setPermissionState('denied');
           }
@@ -229,7 +253,7 @@ const BarcodeScanner = ({ isOpen, onClose, onScanSuccess }: BarcodeScannerProps)
       
       // Request camera access
       const stream = await navigator.mediaDevices.getUserMedia({ 
-        video: { facingMode: 'environment' } 
+        video: { facingMode: { ideal: 'environment' } }
       });
       
       // Immediately stop the stream - we just needed permission
@@ -240,6 +264,7 @@ const BarcodeScanner = ({ isOpen, onClose, onScanSuccess }: BarcodeScannerProps)
       
       // Small delay before starting scanner to ensure camera is released
       await new Promise(resolve => setTimeout(resolve, 300));
+      await nextPaint();
       startScanner();
     } catch (err: any) {
       if (err.name === 'NotAllowedError') {
@@ -300,156 +325,153 @@ const BarcodeScanner = ({ isOpen, onClose, onScanSuccess }: BarcodeScannerProps)
           </div>
 
           {/* Scanner Container */}
-          <div className="flex flex-col items-center justify-center min-h-screen px-6">
-            {/* Permission Prompt Screen */}
-            {permissionState === 'prompt' && !isScanning && (
+          <div className="relative flex flex-col items-center justify-center min-h-screen px-6">
+            <div className="w-full max-w-lg px-4">
+              {/* Keep this container mounted at all times to avoid html5-qrcode losing its target */}
+              <div
+                id="scanner-container"
+                className="w-full aspect-[4/3] bg-muted rounded-xl overflow-hidden relative"
+              >
+                {/* Loading overlay */}
+                {isInitializing && (
+                  <div className="absolute inset-0 bg-background/80 backdrop-blur-sm flex items-center justify-center z-20">
+                    <div className="text-center">
+                      <motion.div
+                        className="w-12 h-12 border-4 border-primary border-t-transparent rounded-full mx-auto mb-3"
+                        animate={{ rotate: 360 }}
+                        transition={{ duration: 1, repeat: Infinity, ease: 'linear' }}
+                      />
+                      <p className="text-foreground/80 text-sm">Starting camera...</p>
+                    </div>
+                  </div>
+                )}
+
+                {/* Animated scan line */}
+                {showScannerUi && !isInitializing && (
+                  <motion.div
+                    className="absolute left-4 right-4 h-0.5 bg-primary/80 rounded-full shadow-lg z-10"
+                    style={{ boxShadow: '0 0 8px 2px hsl(var(--primary) / 0.5)' }}
+                    animate={{ top: ['30%', '70%', '30%'] }}
+                    transition={{ duration: 2.5, repeat: Infinity, ease: 'easeInOut' }}
+                  />
+                )}
+
+                {/* Corner brackets */}
+                {showScannerUi && (
+                  <div className="absolute inset-0 pointer-events-none z-10">
+                    <div className="absolute top-[20%] left-[8%] w-10 h-10 border-t-2 border-l-2 border-primary rounded-tl-lg" />
+                    <div className="absolute top-[20%] right-[8%] w-10 h-10 border-t-2 border-r-2 border-primary rounded-tr-lg" />
+                    <div className="absolute bottom-[20%] left-[8%] w-10 h-10 border-b-2 border-l-2 border-primary rounded-bl-lg" />
+                    <div className="absolute bottom-[20%] right-[8%] w-10 h-10 border-b-2 border-r-2 border-primary rounded-br-lg" />
+                  </div>
+                )}
+              </div>
+
+              {showScannerUi && (
+                <p className="text-center text-muted-foreground text-sm mt-4 font-serif">
+                  Position barcode in center of frame
+                </p>
+              )}
+            </div>
+
+            {/* Overlay screens (prompt/denied/error) */}
+            {permissionState === 'prompt' && !showScannerUi && (
               <motion.div
-                className="text-center max-w-xs"
+                className="absolute inset-0 flex items-center justify-center px-6"
                 initial={{ opacity: 0, y: 20 }}
                 animate={{ opacity: 1, y: 0 }}
               >
-                <div className="w-20 h-20 mx-auto mb-6 bg-secondary rounded-full flex items-center justify-center">
-                  <Camera className="w-10 h-10 text-primary" />
+                <div className="text-center max-w-xs">
+                  <div className="w-20 h-20 mx-auto mb-6 bg-secondary rounded-full flex items-center justify-center">
+                    <Camera className="w-10 h-10 text-primary" />
+                  </div>
+                  <h3 className="text-xl font-display font-semibold text-foreground mb-2">
+                    Camera Access Needed
+                  </h3>
+                  <p className="text-muted-foreground font-serif mb-6">
+                    To scan medication barcodes, Vigil needs access to your camera. Your camera feed never leaves your device.
+                  </p>
+                  <Button onClick={handleRequestPermission} className="w-full">
+                    Allow Camera Access
+                  </Button>
                 </div>
-                <h3 className="text-xl font-display font-semibold text-foreground mb-2">
-                  Camera Access Needed
-                </h3>
-                <p className="text-muted-foreground font-serif mb-6">
-                  To scan medication barcodes, Vigil needs access to your camera. Your camera feed never leaves your device.
-                </p>
-                <Button onClick={handleRequestPermission} className="w-full">
-                  Allow Camera Access
-                </Button>
               </motion.div>
             )}
 
-            {/* Permission Denied Screen */}
-            {permissionState === 'denied' && (
+            {permissionState === 'denied' && !showScannerUi && (
               <motion.div
-                className="text-center max-w-xs"
+                className="absolute inset-0 flex items-center justify-center px-6"
                 initial={{ opacity: 0, y: 20 }}
                 animate={{ opacity: 1, y: 0 }}
               >
-                <div className="w-20 h-20 mx-auto mb-6 bg-destructive/10 rounded-full flex items-center justify-center">
-                  <CameraOff className="w-10 h-10 text-destructive" />
-                </div>
-                <h3 className="text-xl font-display font-semibold text-foreground mb-2">
-                  Camera Access Denied
-                </h3>
-                <p className="text-muted-foreground font-serif mb-6">
-                  Please enable camera access in your browser settings to scan barcodes.
-                </p>
-                <div className="space-y-3">
-                  <div className="text-sm text-muted-foreground bg-muted p-3 rounded-lg text-left">
-                    <p className="font-medium mb-1">How to enable:</p>
-                    <ol className="list-decimal ml-4 space-y-1">
-                      <li>Tap the lock/info icon in your browser's address bar</li>
-                      <li>Find "Camera" in permissions</li>
-                      <li>Change to "Allow"</li>
-                      <li>Refresh this page</li>
-                    </ol>
+                <div className="text-center max-w-xs">
+                  <div className="w-20 h-20 mx-auto mb-6 bg-destructive/10 rounded-full flex items-center justify-center">
+                    <CameraOff className="w-10 h-10 text-destructive" />
                   </div>
+                  <h3 className="text-xl font-display font-semibold text-foreground mb-2">
+                    Camera Access Denied
+                  </h3>
+                  <p className="text-muted-foreground font-serif mb-6">
+                    Please enable camera access in your browser settings to scan barcodes.
+                  </p>
+                  <div className="space-y-3">
+                    <div className="text-sm text-muted-foreground bg-muted p-3 rounded-lg text-left">
+                      <p className="font-medium mb-1">How to enable:</p>
+                      <ol className="list-decimal ml-4 space-y-1">
+                        <li>Tap the lock/info icon in your browser's address bar</li>
+                        <li>Find "Camera" in permissions</li>
+                        <li>Change to "Allow"</li>
+                        <li>Refresh this page</li>
+                      </ol>
+                    </div>
+                    <Button variant="outline" onClick={handleRetry} className="w-full">
+                      <RotateCcw className="w-4 h-4 mr-2" />
+                      Try Again
+                    </Button>
+                  </div>
+                </div>
+              </motion.div>
+            )}
+
+            {permissionState === 'error' && !showScannerUi && (
+              <motion.div
+                className="absolute inset-0 flex items-center justify-center px-6"
+                initial={{ opacity: 0, y: 20 }}
+                animate={{ opacity: 1, y: 0 }}
+              >
+                <div className="text-center max-w-xs">
+                  <div className="w-20 h-20 mx-auto mb-6 bg-destructive/10 rounded-full flex items-center justify-center">
+                    {errorType === 'busy' ? (
+                      <RefreshCw className="w-10 h-10 text-destructive" />
+                    ) : (
+                      <AlertTriangle className="w-10 h-10 text-destructive" />
+                    )}
+                  </div>
+                  <h3 className="text-xl font-display font-semibold text-foreground mb-2">
+                    {errorType === 'busy' ? 'Camera Busy' : 'Camera Error'}
+                  </h3>
+                  <p className="text-muted-foreground font-serif mb-4">
+                    {errorMessage || 'An error occurred while accessing the camera.'}
+                  </p>
+
+                  {errorType === 'busy' && (
+                    <div className="text-sm text-muted-foreground bg-muted p-3 rounded-lg text-left mb-4">
+                      <p className="font-medium mb-1">Quick fix:</p>
+                      <ol className="list-decimal ml-4 space-y-1">
+                        <li>Close your device's camera app</li>
+                        <li>Close other browser tabs using camera</li>
+                        <li>Wait a few seconds</li>
+                        <li>Tap "Try Again" below</li>
+                      </ol>
+                    </div>
+                  )}
+
                   <Button variant="outline" onClick={handleRetry} className="w-full">
                     <RotateCcw className="w-4 h-4 mr-2" />
                     Try Again
                   </Button>
                 </div>
               </motion.div>
-            )}
-
-            {/* Error Screen */}
-            {permissionState === 'error' && (
-              <motion.div
-                className="text-center max-w-xs"
-                initial={{ opacity: 0, y: 20 }}
-                animate={{ opacity: 1, y: 0 }}
-              >
-                <div className="w-20 h-20 mx-auto mb-6 bg-destructive/10 rounded-full flex items-center justify-center">
-                  {errorType === 'busy' ? (
-                    <RefreshCw className="w-10 h-10 text-destructive" />
-                  ) : (
-                    <AlertTriangle className="w-10 h-10 text-destructive" />
-                  )}
-                </div>
-                <h3 className="text-xl font-display font-semibold text-foreground mb-2">
-                  {errorType === 'busy' ? 'Camera Busy' : 'Camera Error'}
-                </h3>
-                <p className="text-muted-foreground font-serif mb-4">
-                  {errorMessage || 'An error occurred while accessing the camera.'}
-                </p>
-                
-                {/* Specific guidance based on error type */}
-                {errorType === 'busy' && (
-                  <div className="text-sm text-muted-foreground bg-muted p-3 rounded-lg text-left mb-4">
-                    <p className="font-medium mb-1">Quick fix:</p>
-                    <ol className="list-decimal ml-4 space-y-1">
-                      <li>Close your device's camera app</li>
-                      <li>Close other browser tabs using camera</li>
-                      <li>Wait a few seconds</li>
-                      <li>Tap "Try Again" below</li>
-                    </ol>
-                  </div>
-                )}
-                
-                <Button variant="outline" onClick={handleRetry} className="w-full">
-                  <RotateCcw className="w-4 h-4 mr-2" />
-                  Try Again
-                </Button>
-              </motion.div>
-            )}
-
-            {/* Active Scanner - always render container when granted or scanning */}
-            {(permissionState === 'granted' || isScanning) && (
-              <div className="w-full max-w-lg px-4">
-                <div
-                  id="scanner-container"
-                  className="w-full aspect-[4/3] bg-black rounded-xl overflow-hidden relative"
-                >
-                  {/* Loading overlay */}
-                  {isInitializing && (
-                    <div className="absolute inset-0 bg-black flex items-center justify-center z-20">
-                      <div className="text-center">
-                        <motion.div
-                          className="w-12 h-12 border-4 border-primary border-t-transparent rounded-full mx-auto mb-3"
-                          animate={{ rotate: 360 }}
-                          transition={{ duration: 1, repeat: Infinity, ease: 'linear' }}
-                        />
-                        <p className="text-white/80 text-sm">Starting camera...</p>
-                      </div>
-                    </div>
-                  )}
-                  {/* Animated scan line */}
-                  {!isInitializing && (
-                    <motion.div
-                      className="absolute left-4 right-4 h-0.5 bg-primary/80 rounded-full shadow-lg z-10"
-                      style={{ boxShadow: '0 0 8px 2px hsl(var(--primary) / 0.5)' }}
-                      animate={{
-                        top: ['30%', '70%', '30%'],
-                      }}
-                      transition={{
-                        duration: 2.5,
-                        repeat: Infinity,
-                        ease: 'easeInOut',
-                      }}
-                    />
-                  )}
-                  {/* Corner brackets */}
-                  <div className="absolute inset-0 pointer-events-none z-10">
-                    <div className="absolute top-[20%] left-[8%] w-10 h-10 border-t-3 border-l-3 border-primary rounded-tl-lg" />
-                    <div className="absolute top-[20%] right-[8%] w-10 h-10 border-t-3 border-r-3 border-primary rounded-tr-lg" />
-                    <div className="absolute bottom-[20%] left-[8%] w-10 h-10 border-b-3 border-l-3 border-primary rounded-bl-lg" />
-                    <div className="absolute bottom-[20%] right-[8%] w-10 h-10 border-b-3 border-r-3 border-primary rounded-br-lg" />
-                  </div>
-                </div>
-                <p className="text-center text-muted-foreground text-sm mt-4 font-serif">
-                  Position barcode in center of frame
-                </p>
-              </div>
-            )}
-
-            {/* Always render hidden container for initialization */}
-            {permissionState !== 'granted' && !isScanning && (
-              <div id="scanner-container" className="hidden" />
             )}
           </div>
         </motion.div>
