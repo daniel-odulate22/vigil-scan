@@ -1,5 +1,5 @@
 import { NavLink, useLocation } from 'react-router-dom';
-import { Pill, User, ScanBarcode, WifiOff, CalendarClock } from 'lucide-react';
+import { Pill, User, ScanBarcode, WifiOff, CalendarClock, Home } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useOnlineStatus } from '@/hooks/useOnlineStatus';
 
@@ -35,11 +35,11 @@ const BottomNav = ({ onScanClick }: BottomNavProps) => {
           transition={{ type: 'spring', stiffness: 400, damping: 17 }}
         >
           <Icon className="w-5 h-5" />
-          <span className="text-xs mt-1 font-medium">{label}</span>
+          <span className="text-[10px] mt-1 font-medium">{label}</span>
         </motion.div>
         {isActive && (
           <motion.div
-            className="absolute top-0 left-1/2 -translate-x-1/2 w-10 h-0.5 bg-primary rounded-full"
+            className="absolute top-0 left-1/2 -translate-x-1/2 w-8 h-0.5 bg-primary rounded-full"
             layoutId="nav-indicator"
           />
         )}
@@ -63,11 +63,14 @@ const BottomNav = ({ onScanClick }: BottomNavProps) => {
           </motion.div>
         )}
       </AnimatePresence>
-      <div className="grid grid-cols-4 h-16 max-w-md mx-auto">
-        <NavItem to="/prescriptions" icon={Pill} label="Meds" />
-        <NavItem to="/schedule" icon={CalendarClock} label="Schedule" />
+      <div className="grid grid-cols-5 h-16 max-w-md mx-auto">
+        {/* Home - far left */}
+        <NavItem to="/" icon={Home} label="Home" />
         
-        {/* Scan button - elevated */}
+        {/* Meds */}
+        <NavItem to="/prescriptions" icon={Pill} label="Meds" />
+        
+        {/* Scan button - center, elevated */}
         <motion.button
           onClick={onScanClick}
           className="flex flex-col items-center justify-center"
@@ -78,9 +81,13 @@ const BottomNav = ({ onScanClick }: BottomNavProps) => {
           <div className="-mt-3 w-12 h-12 bg-primary rounded-full flex items-center justify-center shadow-md ring-2 ring-background">
             <ScanBarcode className="w-6 h-6 text-primary-foreground" />
           </div>
-          <span className="text-xs mt-0.5 font-medium text-primary">Scan</span>
+          <span className="text-[10px] mt-0.5 font-medium text-primary">Scan</span>
         </motion.button>
         
+        {/* Schedule */}
+        <NavItem to="/schedule" icon={CalendarClock} label="Schedule" />
+        
+        {/* Profile - far right */}
         <NavItem to="/profile" icon={User} label="Profile" />
       </div>
     </nav>
