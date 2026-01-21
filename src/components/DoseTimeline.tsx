@@ -1,12 +1,13 @@
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo, useCallback } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Check, X, Clock, Pill, ChevronLeft, ChevronRight } from 'lucide-react';
+import { Check, X, Clock, Pill, ChevronLeft, ChevronRight, Plus } from 'lucide-react';
 import { supabase } from '@/integrations/supabase/client';
 import { useAuth } from '@/hooks/useAuth';
 import { format, startOfDay, endOfDay, startOfWeek, endOfWeek, addDays, subDays, addWeeks, subWeeks, isSameDay, isToday, isBefore, parseISO } from 'date-fns';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
+import { useToast } from '@/hooks/use-toast';
 
 interface Reminder {
   id: string;
@@ -42,12 +43,14 @@ interface ScheduledDose {
 
 const DoseTimeline = () => {
   const { user } = useAuth();
+  const { toast } = useToast();
   const [view, setView] = useState<'daily' | 'weekly'>('daily');
   const [currentDate, setCurrentDate] = useState(new Date());
   const [reminders, setReminders] = useState<Reminder[]>([]);
   const [prescriptions, setPrescriptions] = useState<Prescription[]>([]);
   const [doseLogs, setDoseLogs] = useState<DoseLog[]>([]);
   const [loading, setLoading] = useState(true);
+  const [loggingDose, setLoggingDose] = useState<string | null>(null);
 
   // Fetch data
   useEffect(() => {
@@ -223,6 +226,47 @@ const DoseTimeline = () => {
     return { taken, missed, upcoming, total, adherenceRate };
   }, [scheduledDoses]);
 
+  // Quick log handler for missed doses
+  const handleQuickLog = useCallback(async (dose: ScheduledDose) => {
+    if (!user) return;
+    
+    setLoggingDose(dose.id);
+    try {
+      const { error } = await supabase.from('dose_logs').insert({
+        user_id: user.id,
+        prescription_id: dose.prescriptionId,
+        medication_name: dose.medicationName,
+        taken_at: new Date().toISOString(),
+        verified: false,
+        notes: `Quick-logged from schedule (originally scheduled for ${format(dose.scheduledTime, 'h:mm a')})`,
+      });
+
+      if (error) throw error;
+
+      // Update local state to reflect the change
+      setDoseLogs(prev => [...prev, {
+        id: crypto.randomUUID(),
+        medication_name: dose.medicationName,
+        taken_at: new Date().toISOString(),
+        prescription_id: dose.prescriptionId,
+      }]);
+
+      toast({
+        title: 'Dose logged',
+        description: `${dose.medicationName} marked as taken.`,
+      });
+    } catch (err) {
+      console.error('Error logging dose:', err);
+      toast({
+        title: 'Error',
+        description: 'Failed to log dose. Please try again.',
+        variant: 'destructive',
+      });
+    } finally {
+      setLoggingDose(null);
+    }
+  }, [user, toast]);
+
   const renderDoseCard = (dose: ScheduledDose, index: number) => (
     <motion.div
       key={dose.id}
@@ -241,9 +285,30 @@ const DoseTimeline = () => {
           {dose.dosage && ` • ${dose.dosage}`}
         </p>
       </div>
-      <span className={`text-xs px-2 py-1 rounded-full capitalize ${getStatusBadgeStyles(dose.status)}`}>
-        {dose.status}
-      </span>
+      {dose.status === 'missed' ? (
+        <Button
+          size="sm"
+          variant="outline"
+          className="h-8 gap-1 text-xs border-destructive/50 hover:bg-destructive/10"
+          onClick={() => handleQuickLog(dose)}
+          disabled={loggingDose === dose.id}
+        >
+          {loggingDose === dose.id ? (
+            <motion.div
+              className="w-3 h-3 border-2 border-current border-t-transparent rounded-full"
+              animate={{ rotate: 360 }}
+              transition={{ duration: 1, repeat: Infinity, ease: 'linear' }}
+            />
+          ) : (
+            <Plus className="w-3 h-3" />
+          )}
+          Log Now
+        </Button>
+      ) : (
+        <span className={`text-xs px-2 py-1 rounded-full capitalize ${getStatusBadgeStyles(dose.status)}`}>
+          {dose.status}
+        </span>
+      )}
     </motion.div>
   );
 
@@ -438,9 +503,30 @@ const DoseTimeline = () => {
                         <span className="text-sm font-medium text-foreground truncate flex-1">
                           {dose.medicationName}
                         </span>
-                        <span className="text-xs text-muted-foreground">
-                          {format(dose.scheduledTime, 'h:mm a')}
-                        </span>
+                        {dose.status === 'missed' ? (
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            className="h-6 px-2 gap-1 text-xs"
+                            onClick={() => handleQuickLog(dose)}
+                            disabled={loggingDose === dose.id}
+                          >
+                            {loggingDose === dose.id ? (
+                              <motion.div
+                                className="w-3 h-3 border-2 border-current border-t-transparent rounded-full"
+                                animate={{ rotate: 360 }}
+                                transition={{ duration: 1, repeat: Infinity, ease: 'linear' }}
+                              />
+                            ) : (
+                              <Plus className="w-3 h-3" />
+                            )}
+                            Log
+                          </Button>
+                        ) : (
+                          <span className="text-xs text-muted-foreground">
+                            {format(dose.scheduledTime, 'h:mm a')}
+                          </span>
+                        )}
                       </div>
                     ))
                   )}
