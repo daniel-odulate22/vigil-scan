@@ -35,12 +35,14 @@ const qrboxFunction = (viewfinderWidth: number, viewfinderHeight: number) => {
 const BarcodeScanner = ({ isOpen, onClose, onScanSuccess }: BarcodeScannerProps) => {
   const [permissionState, setPermissionState] = useState<PermissionState>('prompt');
   const [isScanning, setIsScanning] = useState(false);
+  const [isInitializing, setIsInitializing] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [errorType, setErrorType] = useState<'busy' | 'denied' | 'not-found' | 'generic' | null>(null);
   const scannerRef = useRef<Html5Qrcode | null>(null);
   const lastScannedRef = useRef<string | null>(null);
   const debounceTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const retryCountRef = useRef(0);
+  const containerReadyRef = useRef(false);
 
   // Cleanup scanner on unmount or close
   const stopScanner = useCallback(async () => {
@@ -64,11 +66,24 @@ const BarcodeScanner = ({ isOpen, onClose, onScanSuccess }: BarcodeScannerProps)
   // Start the scanner
   const startScanner = useCallback(async () => {
     if (isScanning || scannerRef.current) return;
+    
+    // Wait for container to be ready
+    const container = document.getElementById('scanner-container');
+    if (!container) {
+      console.log('Scanner container not ready, waiting...');
+      setTimeout(() => startScanner(), 100);
+      return;
+    }
 
+    setIsInitializing(true);
     setIsScanning(true);
     setErrorMessage(null);
 
     try {
+      // Release any existing streams first
+      releaseMediaStreams();
+      await new Promise(resolve => setTimeout(resolve, 200));
+
       const html5QrCode = new Html5Qrcode('scanner-container', {
         formatsToSupport: [
           Html5QrcodeSupportedFormats.UPC_A,
@@ -84,17 +99,12 @@ const BarcodeScanner = ({ isOpen, onClose, onScanSuccess }: BarcodeScannerProps)
 
       scannerRef.current = html5QrCode;
 
+      // Simpler config - let the library handle video constraints
       await html5QrCode.start(
         { facingMode: 'environment' },
         {
-          fps: 15,
+          fps: 10,
           qrbox: qrboxFunction,
-          aspectRatio: 1.333, // 4:3 for better barcode visibility
-          videoConstraints: {
-            facingMode: 'environment',
-            width: { min: 640, ideal: 1280, max: 1920 },
-            height: { min: 480, ideal: 720, max: 1080 },
-          },
         },
         (decodedText) => {
           // DEBOUNCE: Prevent multiple scans of same barcode
@@ -128,28 +138,30 @@ const BarcodeScanner = ({ isOpen, onClose, onScanSuccess }: BarcodeScannerProps)
       );
 
       setPermissionState('granted');
+      setIsInitializing(false);
     } catch (err: any) {
       setIsScanning(false);
+      setIsInitializing(false);
       releaseMediaStreams();
       
       const errorName = err?.name || '';
       const errorMsg = err?.message || '';
+      
+      console.error('Scanner error:', errorName, errorMsg);
       
       if (errorName === 'NotAllowedError' || errorMsg.includes('Permission')) {
         setPermissionState('denied');
         setErrorType('denied');
         setErrorMessage('Camera access was denied. Please allow camera access to scan barcodes.');
       } else if (errorName === 'NotReadableError' || errorMsg.includes('Could not start') || errorMsg.includes('in use')) {
-        // Camera is busy or unavailable - common on mobile
         setPermissionState('error');
         setErrorType('busy');
-        setErrorMessage('Camera is busy or unavailable. Please close other camera apps (like your native camera or other browser tabs) and try again.');
+        setErrorMessage('Camera is busy or unavailable. Please close other camera apps and try again.');
       } else if (errorName === 'NotFoundError' || errorMsg.includes('not found')) {
         setPermissionState('error');
         setErrorType('not-found');
         setErrorMessage('No camera found on this device.');
       } else if (errorName === 'OverconstrainedError') {
-        // Constraints not satisfiable - try again with different settings
         setPermissionState('error');
         setErrorType('generic');
         setErrorMessage('Camera settings not supported. Please try again.');
@@ -386,38 +398,58 @@ const BarcodeScanner = ({ isOpen, onClose, onScanSuccess }: BarcodeScannerProps)
               </motion.div>
             )}
 
-            {/* Active Scanner */}
+            {/* Active Scanner - always render container when granted or scanning */}
             {(permissionState === 'granted' || isScanning) && (
               <div className="w-full max-w-lg px-4">
                 <div
                   id="scanner-container"
-                  className="w-full aspect-[3/4] bg-foreground/5 rounded-xl overflow-hidden relative"
+                  className="w-full aspect-[4/3] bg-black rounded-xl overflow-hidden relative"
                 >
+                  {/* Loading overlay */}
+                  {isInitializing && (
+                    <div className="absolute inset-0 bg-black flex items-center justify-center z-20">
+                      <div className="text-center">
+                        <motion.div
+                          className="w-12 h-12 border-4 border-primary border-t-transparent rounded-full mx-auto mb-3"
+                          animate={{ rotate: 360 }}
+                          transition={{ duration: 1, repeat: Infinity, ease: 'linear' }}
+                        />
+                        <p className="text-white/80 text-sm">Starting camera...</p>
+                      </div>
+                    </div>
+                  )}
                   {/* Animated scan line */}
-                  <motion.div
-                    className="absolute left-4 right-4 h-0.5 bg-primary/80 rounded-full shadow-lg z-10"
-                    style={{ boxShadow: '0 0 8px 2px hsl(var(--primary) / 0.5)' }}
-                    animate={{
-                      top: ['30%', '70%', '30%'],
-                    }}
-                    transition={{
-                      duration: 2.5,
-                      repeat: Infinity,
-                      ease: 'easeInOut',
-                    }}
-                  />
+                  {!isInitializing && (
+                    <motion.div
+                      className="absolute left-4 right-4 h-0.5 bg-primary/80 rounded-full shadow-lg z-10"
+                      style={{ boxShadow: '0 0 8px 2px hsl(var(--primary) / 0.5)' }}
+                      animate={{
+                        top: ['30%', '70%', '30%'],
+                      }}
+                      transition={{
+                        duration: 2.5,
+                        repeat: Infinity,
+                        ease: 'easeInOut',
+                      }}
+                    />
+                  )}
                   {/* Corner brackets */}
-                  <div className="absolute inset-0 pointer-events-none">
-                    <div className="absolute top-[25%] left-[10%] w-8 h-8 border-t-2 border-l-2 border-primary rounded-tl-lg" />
-                    <div className="absolute top-[25%] right-[10%] w-8 h-8 border-t-2 border-r-2 border-primary rounded-tr-lg" />
-                    <div className="absolute bottom-[25%] left-[10%] w-8 h-8 border-b-2 border-l-2 border-primary rounded-bl-lg" />
-                    <div className="absolute bottom-[25%] right-[10%] w-8 h-8 border-b-2 border-r-2 border-primary rounded-br-lg" />
+                  <div className="absolute inset-0 pointer-events-none z-10">
+                    <div className="absolute top-[20%] left-[8%] w-10 h-10 border-t-3 border-l-3 border-primary rounded-tl-lg" />
+                    <div className="absolute top-[20%] right-[8%] w-10 h-10 border-t-3 border-r-3 border-primary rounded-tr-lg" />
+                    <div className="absolute bottom-[20%] left-[8%] w-10 h-10 border-b-3 border-l-3 border-primary rounded-bl-lg" />
+                    <div className="absolute bottom-[20%] right-[8%] w-10 h-10 border-b-3 border-r-3 border-primary rounded-br-lg" />
                   </div>
                 </div>
                 <p className="text-center text-muted-foreground text-sm mt-4 font-serif">
-                  Align the barcode within the frame
+                  Position barcode in center of frame
                 </p>
               </div>
+            )}
+
+            {/* Always render hidden container for initialization */}
+            {permissionState !== 'granted' && !isScanning && (
+              <div id="scanner-container" className="hidden" />
             )}
           </div>
         </motion.div>
