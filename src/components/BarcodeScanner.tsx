@@ -3,6 +3,8 @@ import { Html5Qrcode, Html5QrcodeSupportedFormats, Html5QrcodeScannerState } fro
 import { motion, AnimatePresence } from 'framer-motion';
 import { X, Camera, CameraOff, AlertTriangle, RotateCcw, RefreshCw } from 'lucide-react';
 import { Button } from '@/components/ui/button';
+import ScannerDebugPanel from '@/components/scanner/ScannerDebugPanel';
+import ScannerGuidedOverlay from '@/components/scanner/ScannerGuidedOverlay';
 
 interface BarcodeScannerProps {
   isOpen: boolean;
@@ -11,6 +13,15 @@ interface BarcodeScannerProps {
 }
 
 type PermissionState = 'prompt' | 'granted' | 'denied' | 'error';
+
+interface CameraDebugInfo {
+  devices: MediaDeviceInfo[];
+  selectedDeviceId: string | null;
+  trackSettings: MediaTrackSettings | null;
+  trackState: string | null;
+  capabilities: MediaTrackCapabilities | null;
+  errors: string[];
+}
 
 // Helper to release all active media streams
 const releaseMediaStreams = () => {
@@ -24,12 +35,23 @@ const releaseMediaStreams = () => {
   });
 };
 
-// Dynamic qrbox function - uses 80% of smaller viewport dimension
-const qrboxFunction = (viewfinderWidth: number, viewfinderHeight: number) => {
-  const minEdge = Math.min(viewfinderWidth, viewfinderHeight);
-  const qrboxWidth = Math.min(Math.floor(minEdge * 0.85), 350);
-  const qrboxHeight = Math.min(Math.floor(qrboxWidth * 0.5), 200); // Barcode aspect ratio
-  return { width: qrboxWidth, height: qrboxHeight };
+// Dynamic qrbox function - optimized for device performance
+const createQrboxFunction = (isLowEnd: boolean) => {
+  return (viewfinderWidth: number, viewfinderHeight: number) => {
+    const minEdge = Math.min(viewfinderWidth, viewfinderHeight);
+    // Smaller scan region for low-end devices (better performance)
+    const sizeFactor = isLowEnd ? 0.6 : 0.8;
+    const qrboxWidth = Math.min(Math.floor(minEdge * sizeFactor), isLowEnd ? 280 : 350);
+    const qrboxHeight = Math.min(Math.floor(qrboxWidth * 0.5), isLowEnd ? 140 : 200);
+    return { width: qrboxWidth, height: qrboxHeight };
+  };
+};
+
+// Detect low-end device (simple heuristic)
+const isLowEndDevice = (): boolean => {
+  const memory = (navigator as any).deviceMemory;
+  const cores = navigator.hardwareConcurrency;
+  return (memory && memory <= 4) || (cores && cores <= 4);
 };
 
 const BarcodeScanner = ({ isOpen, onClose, onScanSuccess }: BarcodeScannerProps) => {
@@ -38,20 +60,106 @@ const BarcodeScanner = ({ isOpen, onClose, onScanSuccess }: BarcodeScannerProps)
   const [isInitializing, setIsInitializing] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [errorType, setErrorType] = useState<'busy' | 'denied' | 'not-found' | 'generic' | null>(null);
+  
+  // Torch state
+  const [torchSupported, setTorchSupported] = useState(false);
+  const [torchEnabled, setTorchEnabled] = useState(false);
+  
+  // Debug info
+  const [debugInfo, setDebugInfo] = useState<CameraDebugInfo>({
+    devices: [],
+    selectedDeviceId: null,
+    trackSettings: null,
+    trackState: null,
+    capabilities: null,
+    errors: [],
+  });
+  
   const scannerRef = useRef<Html5Qrcode | null>(null);
   const lastScannedRef = useRef<string | null>(null);
   const debounceTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const retryCountRef = useRef(0);
   const isStartingRef = useRef(false);
   const isOpenRef = useRef(false);
+  const videoTrackRef = useRef<MediaStreamTrack | null>(null);
 
   const showScannerUi = permissionState === 'granted' || isInitializing || isScanning;
+  const isLowEnd = useRef(isLowEndDevice()).current;
 
   const nextPaint = () => new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+
+  const addDebugError = useCallback((error: string) => {
+    setDebugInfo(prev => ({
+      ...prev,
+      errors: [...prev.errors.slice(-9), `${new Date().toLocaleTimeString()}: ${error}`],
+    }));
+  }, []);
+
+  // Update debug info from video track
+  const updateTrackDebugInfo = useCallback((track: MediaStreamTrack | null) => {
+    if (!track) {
+      setDebugInfo(prev => ({
+        ...prev,
+        trackSettings: null,
+        trackState: null,
+        capabilities: null,
+      }));
+      return;
+    }
+
+    try {
+      const settings = track.getSettings();
+      const capabilities = track.getCapabilities?.() || null;
+      
+      setDebugInfo(prev => ({
+        ...prev,
+        selectedDeviceId: settings.deviceId || null,
+        trackSettings: settings,
+        trackState: track.readyState,
+        capabilities,
+      }));
+
+      // Check torch support
+      if (capabilities && 'torch' in capabilities) {
+        setTorchSupported(true);
+      }
+    } catch (err) {
+      console.log('Error getting track info:', err);
+    }
+  }, []);
+
+  // Enumerate devices
+  const enumerateDevices = useCallback(async () => {
+    try {
+      const devices = await navigator.mediaDevices.enumerateDevices();
+      const videoDevices = devices.filter(d => d.kind === 'videoinput');
+      setDebugInfo(prev => ({ ...prev, devices: videoDevices }));
+    } catch (err) {
+      addDebugError(`Device enumeration failed: ${err}`);
+    }
+  }, [addDebugError]);
+
+  // Toggle torch
+  const toggleTorch = useCallback(async () => {
+    if (!videoTrackRef.current || !torchSupported) return;
+
+    try {
+      const newState = !torchEnabled;
+      await videoTrackRef.current.applyConstraints({
+        advanced: [{ torch: newState } as any],
+      });
+      setTorchEnabled(newState);
+    } catch (err) {
+      addDebugError(`Torch toggle failed: ${err}`);
+    }
+  }, [torchEnabled, torchSupported, addDebugError]);
 
   // Cleanup scanner on unmount or close
   const stopScanner = useCallback(async () => {
     isStartingRef.current = false;
+    setTorchEnabled(false);
+    videoTrackRef.current = null;
+    
     if (scannerRef.current) {
       try {
         const state = scannerRef.current.getState();
@@ -64,7 +172,6 @@ const BarcodeScanner = ({ isOpen, onClose, onScanSuccess }: BarcodeScannerProps)
       }
       scannerRef.current = null;
     }
-    // Release any remaining media streams
     releaseMediaStreams();
     setIsScanning(false);
     setIsInitializing(false);
@@ -80,17 +187,17 @@ const BarcodeScanner = ({ isOpen, onClose, onScanSuccess }: BarcodeScannerProps)
     setErrorMessage(null);
 
     try {
-      // Release any existing streams first
       releaseMediaStreams();
       await new Promise(resolve => setTimeout(resolve, 200));
-
-      // Ensure React has rendered the visible container before initializing html5-qrcode
       await nextPaint();
 
       const container = document.getElementById('scanner-container');
       if (!container) {
         throw new Error('Scanner container not found');
       }
+
+      // Enumerate devices for debug panel
+      await enumerateDevices();
 
       const html5QrCode = new Html5Qrcode('scanner-container', {
         formatsToSupport: [
@@ -107,49 +214,45 @@ const BarcodeScanner = ({ isOpen, onClose, onScanSuccess }: BarcodeScannerProps)
 
       scannerRef.current = html5QrCode;
 
-      // Simpler config - let the library handle video constraints
+      // Performance optimization: lower FPS for low-end devices
+      const fps = isLowEnd ? 5 : 10;
+      
       await html5QrCode.start(
         { facingMode: { ideal: 'environment' } },
         {
-          fps: 8,
-          qrbox: qrboxFunction,
+          fps,
+          qrbox: createQrboxFunction(isLowEnd),
+          aspectRatio: 1.333, // 4:3 aspect ratio
         },
         (decodedText) => {
-          // DEBOUNCE: Prevent multiple scans of same barcode
           if (lastScannedRef.current === decodedText) return;
           
           lastScannedRef.current = decodedText;
           
-          // Clear any existing timeout
           if (debounceTimeoutRef.current) {
             clearTimeout(debounceTimeoutRef.current);
           }
           
-          // Haptic feedback
           if ('vibrate' in navigator) {
             navigator.vibrate(100);
           }
           
-          // Stop scanner before callback
           stopScanner().then(() => {
             onScanSuccess(decodedText);
           });
           
-          // Reset last scanned after 3 seconds
           debounceTimeoutRef.current = setTimeout(() => {
             lastScannedRef.current = null;
           }, 3000);
         },
-        () => {
-          // QR code not detected - this is normal, don't log
-        }
+        () => {}
       );
 
       setPermissionState('granted');
       setIsScanning(true);
       setIsInitializing(false);
 
-      // iOS/Safari reliability: ensure video fills container and plays inline
+      // Get video track for torch control and debug info
       const videoEl = container.querySelector('video') as HTMLVideoElement | null;
       if (videoEl) {
         videoEl.setAttribute('playsinline', 'true');
@@ -158,6 +261,20 @@ const BarcodeScanner = ({ isOpen, onClose, onScanSuccess }: BarcodeScannerProps)
         videoEl.style.width = '100%';
         videoEl.style.height = '100%';
         videoEl.style.objectFit = 'cover';
+
+        const stream = videoEl.srcObject as MediaStream;
+        if (stream) {
+          const track = stream.getVideoTracks()[0];
+          videoTrackRef.current = track;
+          updateTrackDebugInfo(track);
+
+          // Monitor track state changes
+          track.onended = () => {
+            setDebugInfo(prev => ({ ...prev, trackState: 'ended' }));
+            addDebugError('Video track ended unexpectedly');
+          };
+          track.onmute = () => addDebugError('Video track muted');
+        }
       }
 
       isStartingRef.current = false;
@@ -171,6 +288,7 @@ const BarcodeScanner = ({ isOpen, onClose, onScanSuccess }: BarcodeScannerProps)
       const errorMsg = err?.message || '';
       
       console.error('Scanner error:', errorName, errorMsg);
+      addDebugError(`${errorName}: ${errorMsg}`);
       
       if (errorName === 'NotAllowedError' || errorMsg.includes('Permission')) {
         setPermissionState('denied');
@@ -194,7 +312,7 @@ const BarcodeScanner = ({ isOpen, onClose, onScanSuccess }: BarcodeScannerProps)
         setErrorMessage(errorMsg || 'Failed to start camera. Please try again.');
       }
     }
-  }, [onScanSuccess, stopScanner]);
+  }, [onScanSuccess, stopScanner, enumerateDevices, updateTrackDebugInfo, addDebugError, isLowEnd]);
 
   // Check camera permission on open
   useEffect(() => {
@@ -204,14 +322,13 @@ const BarcodeScanner = ({ isOpen, onClose, onScanSuccess }: BarcodeScannerProps)
       return;
     }
 
-    // Check if camera API is available
     if (!navigator.mediaDevices?.getUserMedia) {
       setPermissionState('error');
       setErrorMessage('Camera is not supported on this device or browser.');
+      addDebugError('getUserMedia not supported');
       return;
     }
 
-    // Check permission state
     navigator.permissions?.query({ name: 'camera' as PermissionName })
       .then((result) => {
         if (result.state === 'granted') {
@@ -233,8 +350,6 @@ const BarcodeScanner = ({ isOpen, onClose, onScanSuccess }: BarcodeScannerProps)
         };
       })
       .catch(() => {
-        // Permissions API not supported (common on iOS Safari)
-        // Try to request permission directly
         handleRequestPermission();
       });
 
@@ -244,29 +359,26 @@ const BarcodeScanner = ({ isOpen, onClose, onScanSuccess }: BarcodeScannerProps)
         clearTimeout(debounceTimeoutRef.current);
       }
     };
-  }, [isOpen, startScanner, stopScanner]);
+  }, [isOpen, startScanner, stopScanner, addDebugError]);
 
   const handleRequestPermission = async () => {
     try {
-      // First release any existing streams
       releaseMediaStreams();
       
-      // Request camera access
       const stream = await navigator.mediaDevices.getUserMedia({ 
         video: { facingMode: { ideal: 'environment' } }
       });
       
-      // Immediately stop the stream - we just needed permission
       stream.getTracks().forEach(track => track.stop());
       
       setPermissionState('granted');
       retryCountRef.current = 0;
       
-      // Small delay before starting scanner to ensure camera is released
       await new Promise(resolve => setTimeout(resolve, 300));
       await nextPaint();
       startScanner();
     } catch (err: any) {
+      addDebugError(`Permission request failed: ${err.name}`);
       if (err.name === 'NotAllowedError') {
         setPermissionState('denied');
         setErrorType('denied');
@@ -287,16 +399,12 @@ const BarcodeScanner = ({ isOpen, onClose, onScanSuccess }: BarcodeScannerProps)
     setErrorType(null);
     retryCountRef.current += 1;
     
-    // Stop any existing scanner first
     await stopScanner();
     
-    // Add increasing delay for retries to allow camera to fully release
     const delay = Math.min(500 + (retryCountRef.current * 300), 2000);
     await new Promise(resolve => setTimeout(resolve, delay));
     
     setPermissionState('prompt');
-    
-    // Try requesting permission again
     handleRequestPermission();
   };
 
@@ -327,7 +435,6 @@ const BarcodeScanner = ({ isOpen, onClose, onScanSuccess }: BarcodeScannerProps)
           {/* Scanner Container */}
           <div className="relative flex flex-col items-center justify-center min-h-screen px-6">
             <div className="w-full max-w-lg px-4">
-              {/* Keep this container mounted at all times to avoid html5-qrcode losing its target */}
               <div
                 id="scanner-container"
                 className="w-full aspect-[4/3] bg-muted rounded-xl overflow-hidden relative"
@@ -342,8 +449,20 @@ const BarcodeScanner = ({ isOpen, onClose, onScanSuccess }: BarcodeScannerProps)
                         transition={{ duration: 1, repeat: Infinity, ease: 'linear' }}
                       />
                       <p className="text-foreground/80 text-sm">Starting camera...</p>
+                      {isLowEnd && (
+                        <p className="text-muted-foreground text-xs mt-1">Optimized for your device</p>
+                      )}
                     </div>
                   </div>
+                )}
+
+                {/* Guided overlay with tips and torch */}
+                {showScannerUi && !isInitializing && (
+                  <ScannerGuidedOverlay
+                    torchSupported={torchSupported}
+                    torchEnabled={torchEnabled}
+                    onToggleTorch={toggleTorch}
+                  />
                 )}
 
                 {/* Animated scan line */}
@@ -355,22 +474,17 @@ const BarcodeScanner = ({ isOpen, onClose, onScanSuccess }: BarcodeScannerProps)
                     transition={{ duration: 2.5, repeat: Infinity, ease: 'easeInOut' }}
                   />
                 )}
-
-                {/* Corner brackets */}
-                {showScannerUi && (
-                  <div className="absolute inset-0 pointer-events-none z-10">
-                    <div className="absolute top-[20%] left-[8%] w-10 h-10 border-t-2 border-l-2 border-primary rounded-tl-lg" />
-                    <div className="absolute top-[20%] right-[8%] w-10 h-10 border-t-2 border-r-2 border-primary rounded-tr-lg" />
-                    <div className="absolute bottom-[20%] left-[8%] w-10 h-10 border-b-2 border-l-2 border-primary rounded-bl-lg" />
-                    <div className="absolute bottom-[20%] right-[8%] w-10 h-10 border-b-2 border-r-2 border-primary rounded-br-lg" />
-                  </div>
-                )}
               </div>
 
               {showScannerUi && (
                 <p className="text-center text-muted-foreground text-sm mt-4 font-serif">
                   Position barcode in center of frame
                 </p>
+              )}
+
+              {/* Debug Panel */}
+              {showScannerUi && (
+                <ScannerDebugPanel debugInfo={debugInfo} />
               )}
             </div>
 
