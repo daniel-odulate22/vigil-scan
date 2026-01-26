@@ -1,10 +1,11 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { Html5Qrcode, Html5QrcodeSupportedFormats, Html5QrcodeScannerState } from 'html5-qrcode';
 import { motion, AnimatePresence } from 'framer-motion';
-import { X, Camera, CameraOff, AlertTriangle, RotateCcw, RefreshCw } from 'lucide-react';
+import { X, Camera, CameraOff, AlertTriangle, RotateCcw, RefreshCw, Keyboard } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import ScannerDebugPanel from '@/components/scanner/ScannerDebugPanel';
 import ScannerGuidedOverlay from '@/components/scanner/ScannerGuidedOverlay';
+import ManualBarcodeEntry from '@/components/scanner/ManualBarcodeEntry';
 
 interface BarcodeScannerProps {
   isOpen: boolean;
@@ -60,6 +61,7 @@ const BarcodeScanner = ({ isOpen, onClose, onScanSuccess }: BarcodeScannerProps)
   const [isInitializing, setIsInitializing] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [errorType, setErrorType] = useState<'busy' | 'denied' | 'not-found' | 'generic' | null>(null);
+  const [showManualEntry, setShowManualEntry] = useState(false);
   
   // Torch state
   const [torchSupported, setTorchSupported] = useState(false);
@@ -476,20 +478,50 @@ const BarcodeScanner = ({ isOpen, onClose, onScanSuccess }: BarcodeScannerProps)
                 )}
               </div>
 
-              {showScannerUi && (
+              {showScannerUi && !showManualEntry && (
                 <p className="text-center text-muted-foreground text-sm mt-4 font-serif">
                   Position barcode in center of frame
                 </p>
               )}
 
+              {/* Manual entry button when scanning */}
+              {showScannerUi && !showManualEntry && (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => setShowManualEntry(true)}
+                  className="mt-3 mx-auto flex items-center gap-2 text-muted-foreground"
+                >
+                  <Keyboard className="w-4 h-4" />
+                  Enter manually instead
+                </Button>
+              )}
+
               {/* Debug Panel */}
-              {showScannerUi && (
+              {showScannerUi && !showManualEntry && (
                 <ScannerDebugPanel debugInfo={debugInfo} />
               )}
             </div>
 
+            {/* Manual Entry Mode */}
+            {showManualEntry && (
+              <motion.div
+                className="absolute inset-0 flex items-center justify-center px-6 pt-16"
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+              >
+                <ManualBarcodeEntry
+                  onSubmit={(code) => {
+                    setShowManualEntry(false);
+                    onScanSuccess(code);
+                  }}
+                  onCancel={() => setShowManualEntry(false)}
+                />
+              </motion.div>
+            )}
+
             {/* Overlay screens (prompt/denied/error) */}
-            {permissionState === 'prompt' && !showScannerUi && (
+            {permissionState === 'prompt' && !showScannerUi && !showManualEntry && (
               <motion.div
                 className="absolute inset-0 flex items-center justify-center px-6"
                 initial={{ opacity: 0, y: 20 }}
@@ -505,14 +537,22 @@ const BarcodeScanner = ({ isOpen, onClose, onScanSuccess }: BarcodeScannerProps)
                   <p className="text-muted-foreground font-serif mb-6">
                     To scan medication barcodes, Vigil needs access to your camera. Your camera feed never leaves your device.
                   </p>
-                  <Button onClick={handleRequestPermission} className="w-full">
+                  <Button onClick={handleRequestPermission} className="w-full mb-3">
                     Allow Camera Access
+                  </Button>
+                  <Button 
+                    variant="ghost" 
+                    onClick={() => setShowManualEntry(true)} 
+                    className="w-full text-muted-foreground"
+                  >
+                    <Keyboard className="w-4 h-4 mr-2" />
+                    Enter barcode manually
                   </Button>
                 </div>
               </motion.div>
             )}
 
-            {permissionState === 'denied' && !showScannerUi && (
+            {permissionState === 'denied' && !showScannerUi && !showManualEntry && (
               <motion.div
                 className="absolute inset-0 flex items-center justify-center px-6"
                 initial={{ opacity: 0, y: 20 }}
@@ -542,12 +582,20 @@ const BarcodeScanner = ({ isOpen, onClose, onScanSuccess }: BarcodeScannerProps)
                       <RotateCcw className="w-4 h-4 mr-2" />
                       Try Again
                     </Button>
+                    <Button 
+                      variant="ghost" 
+                      onClick={() => setShowManualEntry(true)} 
+                      className="w-full text-muted-foreground"
+                    >
+                      <Keyboard className="w-4 h-4 mr-2" />
+                      Enter barcode manually
+                    </Button>
                   </div>
                 </div>
               </motion.div>
             )}
 
-            {permissionState === 'error' && !showScannerUi && (
+            {permissionState === 'error' && !showScannerUi && !showManualEntry && (
               <motion.div
                 className="absolute inset-0 flex items-center justify-center px-6"
                 initial={{ opacity: 0, y: 20 }}
@@ -580,9 +628,17 @@ const BarcodeScanner = ({ isOpen, onClose, onScanSuccess }: BarcodeScannerProps)
                     </div>
                   )}
 
-                  <Button variant="outline" onClick={handleRetry} className="w-full">
+                  <Button variant="outline" onClick={handleRetry} className="w-full mb-3">
                     <RotateCcw className="w-4 h-4 mr-2" />
                     Try Again
+                  </Button>
+                  <Button 
+                    variant="ghost" 
+                    onClick={() => setShowManualEntry(true)} 
+                    className="w-full text-muted-foreground"
+                  >
+                    <Keyboard className="w-4 h-4 mr-2" />
+                    Enter barcode manually
                   </Button>
                 </div>
               </motion.div>
